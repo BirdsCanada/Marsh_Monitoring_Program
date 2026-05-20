@@ -47,3 +47,8 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+#Ignore raw data and outputs
+.csv
+.pdf
+.jpeg

@@ -1,6 +1,11 @@
 require(naturecounts)
 require(INLA)
 require(tidyverse)
+require(sf)
+require(dplyr)
+require(ggplot2)
+require(rnaturalearth)
+require(rnaturalearthdata)
 
 # Create folders as necessary
 if(!dir.exists("Data")) dir.create("Data")
