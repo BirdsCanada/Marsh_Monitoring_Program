@@ -1,0 +1,674 @@
+---
+title: "MMMP Data Exploration"
+author: "Gwendolyn Clark"
+date: "2026-07-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(writexl)
+library(readxl)
+library(dplyr)
+library(stringr)
+library(naturecounts)
+```
+
+#Exploring the NatureCounts R Package
+
+##Install
+```{r}
+install.packages("naturecounts", 
+                 repos = c(birdscanada = 'https://birdscanada.r-universe.dev',
+                           CRAN = 'https://cloud.r-project.org'))
+```
+
+##Download 2013-2019 dataset
+
+```{r}
+mmmp<-my_data <- nc_data_dl(
+  request_id = 267468,
+  username = "gclark",
+  info = "Peer Reviewed Publication"
+)
+write.csv(mmmp, "C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/mmmp_raw_2013-2019.csv") #Turns it into a CSV file
+```
+
+#Read Each Dataset
+
+##2013-2019
+
+```{r}
+mmmp_2013<-read.csv("mmmp_raw_2013-2019.csv")
+```
+
+##2021
+
+###For merging
+```{r}
+primary_2021<-read.csv("2021 MMMP Field Data_Primary Species_cleaned.csv")
+primary_2021<-primary_2021 %>%
+  dplyr::mutate(
+    dplyr::across(
+      where(is.character),
+      ~ iconv(.x, from = "", to = "UTF-8", sub = "?")
+    )
+  ) %>%
+  dplyr::filter(
+    !dplyr::if_all(
+      dplyr::everything(),
+      ~ is.na(.) | trimws(as.character(.)) == ""
+    )
+  ) #This code repairs the formatting for the character column "notes" and then removes the empty rows at the end of the dataframe.
+
+secondary_2021<-read.csv("2021 MMMP Field Data_Secondary Species_cleaned.csv")
+
+pointcount_2021<-read.csv("2021 MMMP Field Data_Point Count Data.csv") #Match the survey data from the three dataframes using the "visitID" column.
+```
+
+###Full dataset
+
+```{r}
+mmmp_2021<-read.csv("2021 MMMP data_merged.csv")
+
+mmmp_2021<-mmmp_2021 %>% filter(spcd!="")
+```
+
+##2022-2025
+```{r}
+mmmp_later<-read.csv("mmmp_raw 2022-2025_naturecounts_downloaded 5-5-2026.csv")
+```
+
+#Data Cleaning
+
+##2013-2019 Dataset
+
+###Remove NA Columns
+
+```{r}
+mmmp_2013<-mmmp_2013%>% 
+  select(where(~ !all(is.na(.))))
+```
+
+###Create the pointID column
+
+This solves the problem with the SiteCode column, which has some values in the format "XX##-##" and some in the format "##".
+
+```{r}
+mmmp_2013$pointID<-sub(
+  "^(([^-]*-)[^-]*).*",
+  "\\1",  mmmp$SamplingEventIdentifier)
+```
+
+###Match Formatting to 2021 data
+
+```{r}
+##2013-2019 data - going to try to match 2021 data as closely as possible##
+mmmp_2013_trim<-mmmp %>% 
+  select(statprov_code, RouteIdentifier, Locality, DecimalLatitude, DecimalLongitude, pointID, Collector, YearCollected, MonthCollected, DayCollected, TimeCollected, EffortMeasurement2, EffortMeasurement5, EffortMeasurement6, EffortMeasurement3, EffortMeasurement4, EffortMeasurement8, SpeciesCode, CommonName, ObservationCount2, ObservationCount3, ObservationCount4, ObservationCount, ObservationCount5, ObservationCount6)
+
+mmmp_2013 <- mmmp_2013_trim %>% rename(
+  prov = statprov_code,
+  route_identifier = RouteIdentifier, #Have to create this column for the 2021 data.
+  route.name = Locality,
+  lat = DecimalLatitude,
+  long = DecimalLongitude,
+  obs = Collector,
+  year = YearCollected,
+  month = MonthCollected,
+  day = DayCollected,
+  start = TimeCollected,
+  cloud = EffortMeasurement2,
+  temp = EffortMeasurement5,
+  ppt = EffortMeasurement6,
+  wind = EffortMeasurement3,
+  dir = EffortMeasurement4,
+  bkgd = EffortMeasurement8,
+  spcd = SpeciesCode,
+  common_name = CommonName,
+  m0.5 = ObservationCount2,
+  m5.10 = ObservationCount3,
+  m10.15 = ObservationCount4,
+  max.count = ObservationCount,
+  target_m5.15 = ObservationCount5,
+  of = ObservationCount6
+)
+
+mmmp_2013<-mmmp_2013 %>%
+  filter(!is.na(spcd),
+         trimws(spcd) != "")
+```
+
+###Species Names and Codes
+
+```{r}
+alpha_species_full<-read.csv("IBP-AOS-list25.csv")
+alpha_species<-alpha_species_full %>% select(SPEC, COMMONNAME)
+alpha_species<-alpha_species %>% rename(common_name = COMMONNAME, spcd = SPEC)
+alpha_species<-alpha_species %>% add_row(spcd = c("YEWA", "WAVI", "ROPI"), common_name=c("Northern Yellow Warbler", "Eastern Warbling Vireo", "Rock Pigeon (Feral Pigeon)"))
+
+mmmp_2013_na<-mmmp_2013%>%filter(is.na(common_name)) #Most of the n/a values here are because of the incorrect code for Northern Waterthrush (should be NOWA, not NOWT).
+
+mmmp_2013$spcd[mmmp_2013$spcd=="NOWT"]<-"NOWA"
+
+#AM = unclear what this means, so not able to replace this. 
+#AMPH = could this be "Amphibian"? Unclear.
+
+remarks_2013<-mmmp %>% select(Remarks,SpeciesCode,CommonName)
+
+#One category of issue is codes that exist, but with a question mark at the end.
+  #ATSP? American Tree Sparrow.
+  #BLBW? Blackburnian Warbler.
+  #COTE? Common Tern.
+  #GBHE? Great Blue Heron.
+  #GCFL? Great Crested Flycatcher.
+  #NOWA? Northern Waterthrush.
+  #RNBU? Red-breasted Nuthatch.
+  #RUGR? Ruffed Grouse.
+  #TRES? Tree Swallow.
+
+#Another category is when the species is not indicated.
+  #PEEP SP - no species given, so can't be more specific than this.
+  #SANDPIPER SP - no species given.
+  #SWALLOW SP - no species given.
+  #WARBLER SP - no species given.
+
+#Finally, there are codes that are wrong.
+  #BLCH - I imagine this might be Black-capped Chickadee (BCCH).
+  #BLTRBL - Black-throated Blue Warbler?
+  #COYH - this could be a different version of COYE.
+  #COYT - assumed to be COYE for 2021 data.
+  #NORA - This is a tough one. Northern Cardinal (NOCA)? Northern Parula (NOPA)? Northern Harrier (NOHA)? Common Raven (CORA)? Something else? 4 individuals reported in interval 10-15, so not likely to be NOCA or NOHA. I'm thinking it's probably NOPA. 
+  #PHBE - This might be Eastern Phoebe (EAPH).
+  #REST - Maybe American Redstart (AMRE)?
+  #REVE - Red-eyed Vireo? This is what they assumed for the same participant with the 2021 data.
+  #WHSP - probably White-throated Sparrow (WTSP).
+
+```
+
+###Observers
+
+```{r}
+observers_2013<-data.frame(table(mmmp_2013$obs, mmmp_2013$year))
+observers_2013<-observers_2013 %>% rename(Observer = Var1, Year=Var2,number_observations=Freq)
+obs_2013_pivot<-observers_2013 %>% pivot_wider(
+  names_from = Year,
+  values_from = number_observations
+)
+```
+
+##2021
+
+###Merge the different sheets
+```{r}
+missing_pc<-pointcount_2021 %>% select(visitID, route.name, lat, long, month, day, start, cloud, temp, ppt, wind, dir, bkgd, both.prim.sec)#This selects the columns we need from the point count dataframe.
+
+primary_with_pc<-primary_2021 %>% left_join(missing_pc, by="visitID", relationship = "many-to-many")
+secondary_with_pc<-secondary_2021 %>% left_join(missing_pc, by="visitID", relationship = "many-to-many")
+
+secondary_with_pc<-secondary_with_pc %>% rename(m10.15_secondary = m10.15)
+
+full_2021<-primary_with_pc %>% full_join(secondary_with_pc) #This dataset seems to be formatted the way the full 2022-2025 dataset will be formatted, once we get that. 
+full_2021<-full_2021[,c(1:2, 26, 3:4, 27:28, 5:6, 29:30, 7:8, 31:38, 9:24, 39:47, 25)]
+
+write.csv(full_2021, "2021 MMMP data_merged.csv")
+```
+
+###Create route identifier column
+```{r}
+mmmp_2021$route_identifier <- paste(data_2021$prov, data_2021$route, sep = "") #creates the missing route_identifier column
+mmmp_2021<-mmmp_2021 %>% relocate(route_identifier, .before = route.name) #reposition to make it easier to read the data
+```
+
+###Add common names
+
+```{r}
+alpha_species<-alpha_species %>% filter(common_name!="Yellow Warbler")
+alpha_species<-alpha_species %>% filter(common_name!="Warbling Vireo")
+alpha_species<-alpha_species %>% add_row(spcd=c("GOOT"), common_name=c("Common Gallinule/American Coot"))
+
+mmmp_2021$spcd[mmmp_2021$spcd=="AMGO"]<-"AGOL" #Alpha code changed because of confusion with American Goshawk
+mmmp_2021$spcd[mmmp_2021$spcd=="HERG"]<-"AHGU" #Reclassified to American Herring Gull
+mmmp_2021$spcd[mmmp_2021$spcd=="RIPH"]<-"RNEP" #Alpha code changed because of confusion with Red-necked Phalarope
+mmmp_2021$spcd[mmmp_2021$spcd=="NOGO"]<-"AGOS" #Reclassification and renaming from Northern Goshawk to American Goshawk
+mmmp_2021$spcd[mmmp_2021$spcd=="YCKI"]<-"GCKI" #I assume this is just a confusion with the species name - thinking it's "Yellow-crowned Kinglet" and not "Golden-crowned Kinglet"
+
+mmmp_2021<-mmmp_2021 %>% left_join(alpha_species, by="spcd", relationship = "many-to-many")
+
+mmmp_2021<-mmmp_2021 %>% filter(spcd!="ONLY COUNTED PRIMARY SPECIES")
+
+mmmp_2021<-mmmp_2021 %>% relocate(common_name, .after = spcd)
+```
+
+###Observers
+
+```{r}
+observers_2021<-data.frame(table(mmmp_2021$obs))
+observers_2021<-observers_2021 %>% rename(Observer=Var1, "2021"=Freq)
+
+observers_to2021<-obs_2013_pivot %>% full_join(observers_2021, by="Observer")
+observers_to2021[is.na(observers_to2021)]<-0
+
+write.csv(observers_to2021, "Observers from 2013 to 2021.csv")
+
+names_to21<-read.csv("List of Observer Names 2013-20.csv", header=T)
+
+pivot_names<-names_to21 %>% mutate(value=1) %>% pivot_wider(names_from = "year", values_from="value", values_fill = 0)
+
+write_xlsx(pivot_names, "Pivot Table of Observer Names and Years 2013-2020.xlsx")
+
+justnames_int<-names_to21 %>% select(first.name, last.name, initials)
+unique_namesins<-unique(justnames_int)
+unique_namesins$Observer<-toupper(unique_namesins$initials)
+
+names_codes_to21<-observers_to2021 %>% left_join(unique_namesins, by="Observer")
+
+write_xlsx(names_codes_to21, "Pivot Table of Observer Names and Codes 2013-2021.xlsx")
+```
+
+##2022-2025
+
+```{r}
+mmmp_later<-read.csv("mmmp_raw 2022-2025_naturecounts_downloaded 5-5-2026.csv")
+
+mmmp_2022<-mmmp_later %>% select(StateProvince, RouteUniqueName, Latitude, Longitude, LocalityName, SiteCode, FirstName, LastName, Year, Month, Day, StartTime, CloudCover10, TemperatureCelciusStart, Precipitation, WindBeaufortStart, WindDirectionStart, NoiseLevel, SpeciesEnglishName, Interval5, Interval1, Interval2, Interval3, Interval6, Interval7, Interval8, Interval9, Interval4) %>% rename(
+  prov = StateProvince,
+  route_identifier = RouteUniqueName, #Have to create this column for the 2021 data.
+  lat = Latitude,
+  long = Longitude,
+  pointID = SiteCode,
+  year = Year,
+  month = Month,
+  day = Day,
+  start = StartTime,
+  cloud = CloudCover10,
+  temp = TemperatureCelciusStart,
+  ppt = Precipitation,
+  wind = WindBeaufortStart,
+  dir = WindDirectionStart,
+  bkgd = NoiseLevel,
+  common_name = SpeciesEnglishName,
+  m0.5 = Interval1,
+  m5.10 = Interval2,
+  m10.15 = Interval3,
+  m1 = Interval6,
+  m2 = Interval7,
+  m3 = Interval8,
+  m4 = Interval9,
+  of = Interval4,
+  bef_aft = Interval5
+)
+
+mmmp_2022<-mmmp_2022 %>% drop_na(common_name)
+mmmp_2022_bird<-mmmp_2022 %>% filter(common_name!="")
+```
+
+###Add alpha codes
+
+```{r}
+mmmp_2022_bird<-mmmp_2022_bird %>% left_join(alpha_species, by="common_name") #"gull sp." doesn't get an alpha code.
+```
+
+###Observers
+
+```{r}
+mmmp_2022_bird$FullName<-paste(mmmp_2022_bird$FirstName, mmmp_2022_bird$LastName, sep=" ")
+
+observers_2022<-data.frame(table(mmmp_2022_bird$FullName, mmmp_2022_bird$year))
+observers_2022<-observers_2022 %>% rename(FullName = Var1, Year=Var2, number_observations=Freq)
+
+names_years_2022<-observers_2022 %>% pivot_wider(names_from = Year, values_from = number_observations)
+
+justnamescodes21<-read.csv("Names and Code through 2021.csv", header=T)
+
+namescodes22<-names_years_2022 %>% left_join(justnamescodes21, by="FullName")
+
+firstlast22<-mmmp_2022_bird %>% select(FirstName, LastName)
+uniqueFL22<-unique(firstlast22)
+uniqueFL22$FullName<-paste(uniqueFL22$FirstName, uniqueFL22$LastName, sep=" ")
+uniqueFL22<-uniqueFL22 %>% rename(first.name=FirstName, last.name=LastName)
+
+namescodes22<-namescodes22[,-c(7:8)]
+
+namescodes22full<-namescodes22 %>% left_join(uniqueFL22, by="FullName")
+```
+
+####Merge all the observer data
+
+```{r}
+fullto21obs<-read_excel("Pivot Table of Observer Names and Codes 2013-2021.xlsx")
+
+allobservers<-fullto21obs %>% full_join(namescodes22full, by=c("Observer", "first.name", "last.name", "FullName"))
+
+write_xlsx(allobservers, "Raw Database of All Observers.xlsx")
+```
+
+#Data Structure
+
+```{r}
+str(cleanMMMP1319)
+```
+
+#Years of Data
+
+```{r}
+years<-sort(unique(mmmp2013$YearCollected))
+years
+```
+This dataset only goes to 2019 and the data in the other dataset on NatureCounts starts at 2022, so 2020 and 2021 are missing. Will have to chat with Catherine about this problem again.
+
+#Structure of Bird Data
+
+##Trimmed 2013-2019 Data
+
+```{r}
+trimmed1319<-cleanMMMP1319[,c(7,20:30,37,44,49:66,69:84)]
+
+#Rename all the columns without a descriptive name
+
+trimmed1319<-trimmed1319 %>% rename(
+PointCountMinutes=EffortMeasurement1,
+CloudCode=EffortMeasurement2,
+WindStrength=EffortMeasurement3,
+WindDirection=EffortMeasurement4,
+Temperature=EffortMeasurement5,
+PrecipitationCode=EffortMeasurement6,
+HabitatType=EffortMeasurement7,
+BackgroundNoise=EffortMeasurement8,
+
+TotalCount=ObservationCount,
+Count_0_5_min=ObservationCount2,
+Count_5_10_min=ObservationCount3,
+Count_10_15_min=ObservationCount4,
+TargetSpecies_5_15_min=ObservationCount5,
+Outside_Flythrough=ObservationCount6
+
+)
+
+write_xlsx(trimmed1319, "C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/mmmp_naturecounts_data_2013-2019_trimmed.xlsx")
+```
+
+```{r}
+birdcolumns1319<-cleanMMMP1319[,c(7,12:13,69:80,84,88)]
+
+MAWR<-birdcolumns1319 %>% filter(SpeciesCode=="MAWR")
+```
+
+For secondary species, the data are in the typical three intervals (0-5 min, 5-10 min, 10-15 min). There is also a column for Total Count, which is the maximum value when comparing the totals for the three intervals.
+
+Primary species are recorded the same way as secondary species, but there is an additional column for Target Species (5-15 min).
+
+Fly-throughs were counted for this protocol but only for target species, which makes sense (they have an unlimited radius).
+
+##2022-2025 data
+```{r}
+raw22_25<-read_excel("C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/mmmp_raw 2022-2025_naturecounts_downloaded 5-5-2026.xlsx")
+
+trim22_25<-raw22_25 %>% select(FormID, CollectorNumber,Year, Month, Day,StartTime,RouteUniqueName,SiteCode,LocalityName,Latitude,Longitude,RecordID , SpeciesEnglishName,Interval1,Interval2,Interval3,Interval4,Interval5,Interval6,Interval7,Interval8,Interval9)
+
+rawdistances22_25<-read_excel("C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/naturecounts_mmmp_distances_raw 2022-2025.xlsx")
+
+trimdistances<-rawdistances22_25 %>% select(form_id, record_id, value) %>% rename(FormID=form_id,RecordID=record_id)
+
+withdistances<-trim22_25 %>% full_join(trimdistances, by=c("RecordID","FormID"))
+```
+
+#Matching locations across datasets
+
+##2013-2019 Locations with Coordinates
+
+```{r}
+locations20132019<-cleanMMMP1319 %>% select(Locality, RouteIdentifier, SurveyAreaIdentifier, DecimalLatitude, DecimalLongitude)
+
+uniquelocations1319<-unique(locations20132019)
+
+write_xlsx(uniquelocations1319, "C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/Unique Locations in the 2013-2019 database.xlsx")
+```
+
+##Fixing the Mixed Formatting of the SurveyAreaIdentifier column
+
+```{r}
+uniquelocations1319$Identifier <- ifelse(!is.na(as.numeric(uniquelocations1319$SurveyAreaIdentifier)), NA, uniquelocations1319$SurveyAreaIdentifier)
+
+cleanunique1319<-na.omit(uniquelocations1319)
+
+codecoord<-cleanunique1319 %>% select(SurveyAreaIdentifier, DecimalLatitude, DecimalLongitude)
+
+fixedlocations1319<-uniquelocations1319 %>% left_join(codecoord, by=c("DecimalLatitude", "DecimalLongitude"))
+fixedlocations1319<-fixedlocations1319 %>% rename(SiteCode=SurveyAreaIdentifier.y)
+
+points1319<-fixedlocations1319[,c(1:2, 4:5, 7)]
+points1319trim<-points1319 %>% mutate(across(where(is.character), str_trim, side = "right"))
+uniquepoints1319<-unique(points1319trim)
+uniquepoints1319$dataset<-"2013-2019"
+
+uniquepoints1319<-uniquepoints1319[,c(1:2, 5, 3:4, 6)]
+
+write_xlsx(uniquepoints1319, "C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/Unique Points in the 2013-2019 database.xlsx")
+```
+
+##Mapping the 2013-2019 locations
+
+```{r}
+routes <- unique(fixedlocations1319$Locality)
+n_routes <- length(routes)
+
+# base palette (e.g., Set1 = 9 colours)
+base_pal <- brewer.pal(9, "Set1")
+
+# repeat the palette so it's long enough
+pal_vec <- rep(base_pal, length.out = n_routes)
+
+# create a named vector so each route always gets its assigned colour
+names(pal_vec) <- routes
+
+# define color function for leaflet
+pal <- colorFactor(palette = pal_vec, domain = routes)
+
+#fetch country and province borders
+
+points20132019<-leaflet(fixedlocations1319) %>% 
+  addProviderTiles(providers$Esri.WorldImagery, group="Satellite") %>%
+  addProviderTiles(providers$OpenStreetMap, group = "Hybrid Satellite") %>%
+   addLayersControl(
+    baseGroups = c("Satellite", "Hybrid Satellite"),
+    options = layersControlOptions(collapsed = FALSE) # FALSE keeps the menu open
+  ) %>%
+  addCircleMarkers(
+    lng = ~DecimalLongitude,
+    lat = ~DecimalLatitude,
+    fillColor = ~pal(Locality),
+    fillOpacity = 0.8,
+    radius = 4,
+    stroke = TRUE,
+    color="black",
+    weight=0.5,
+    label = ~SiteCode,      # shows route on hover
+    layerId = ~SiteCode,
+    group = "SiteCodes"
+  ) %>%
+  addSearchFeatures(
+     targetGroups = "SiteCodes",   # 🔑 MUST match group name
+    options = searchFeaturesOptions(
+      zoom = 12,
+      autoCollapse = TRUE,
+      firstTipSubmit = TRUE
+    )
+  )
+points20132019
+
+saveWidget(MMMPpointsMap, file = "2013-2019 MMMP points surveyed.html", selfcontained = TRUE)
+```
+
+##2022-2025
+
+```{r}
+raw22_25<-read_excel("C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/mmmp_raw 2022-2025_naturecounts_downloaded 5-5-2026.xlsx")
+
+localities22_25<-raw22_25 %>% select(RouteUniqueName, SiteCode, LocalityName, Latitude, Longitude)
+
+uniquelocalities22_25<-unique(localities22_25)
+
+uniquelocalities22_25<-uniquelocalities22_25 %>% rename(RouteIdentifier=RouteUniqueName, Locality=LocalityName, DecimalLatitude=Latitude, DecimalLongitude=Longitude) %>% mutate(dataset="2022-2025")
+
+uniquelocalities22_25<-uniquelocalities22_25[,c(3,1:2,4:6)]
+
+write_xlsx(uniquelocalities22_25, "C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/Unique Points in the 2022-2025 database.xlsx")
+
+localities_joined<-uniquepoints1319 %>% full_join(uniquelocalities22_25, by=c("DecimalLatitude", "DecimalLongitude", "dataset", "SiteCode", "Locality", "RouteIdentifier"))
+
+write_xlsx(localities_joined, "C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/Point Comparison Database.xlsx")
+```
+
+##Comparing Locations on a Map
+
+```{r}
+allsites13_25<-rbind(uniquepoints1319, uniquelocalities22_25)
+
+dataset <- unique(allsites13_25$dataset)
+n_sets <- length(dataset)
+
+# base palette (e.g., Set1 = 9 colours)
+base_pal <- brewer.pal(9, "Set1")
+
+# repeat the palette so it's long enough
+pal_vec <- rep(base_pal, length.out = n_sets)
+
+# create a named vector so each route always gets its assigned colour
+names(pal_vec) <- dataset
+
+# define color function for leaflet
+pal <- colorFactor(palette = pal_vec, domain = dataset)
+
+#fetch country and province borders
+
+points20132025<-leaflet(allsites13_25) %>% 
+  addProviderTiles(providers$Esri.WorldImagery, group="Satellite") %>%
+  addProviderTiles(providers$OpenStreetMap, group = "Hybrid Satellite") %>%
+   addLayersControl(
+    baseGroups = c("Satellite", "Hybrid Satellite"),
+    options = layersControlOptions(collapsed = FALSE) # FALSE keeps the menu open
+  ) %>%
+  addCircleMarkers(
+    lng = ~DecimalLongitude,
+    lat = ~DecimalLatitude,
+    fillColor = ~pal(dataset),
+    fillOpacity = 0.8,
+    radius = 4,
+    stroke = TRUE,
+    color="black",
+    weight=0.5,
+    label = ~SiteCode,      # shows route on hover
+    layerId = ~SiteCode,
+    group = "SiteCodes"
+  ) %>%
+  addSearchFeatures(
+     targetGroups = "SiteCodes",   # 🔑 MUST match group name
+    options = searchFeaturesOptions(
+      zoom = 12,
+      autoCollapse = TRUE,
+      firstTipSubmit = TRUE
+    )
+  )
+points20132025
+```
+
+#Replication across sites
+
+##2013-2019
+
+```{r}
+yearlocality<-cleanMMMP1319 %>% select(YearCollected, Locality, RouteIdentifier)
+
+yearlocalityunique<-unique(yearlocality)
+
+routeyear1319pivot<-yearlocalityunique%>% mutate(value=1) %>% pivot_wider(
+	names_from = YearCollected,
+	values_from = value,
+	values_fill = 0
+) %>% rename(route=Locality)
+
+routeyear1319pivot$NumberYears<-rowSums(routeyear1319pivot[,2:8])
+
+routeyear1319pivot$RouteIdentifier[routeyear1319pivot$route=="Eddy Marsh"]<-"NS03"
+```
+
+##2022-2026
+
+```{r}
+raw22_25<-read_excel("C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/mmmp_raw 2022-2025_naturecounts_downloaded 5-5-2026.xlsx")
+
+mmmproutes<-read_excel("C:/Users/gclark/OneDrive - birdscanada.org/Documents/MMP - Marsh Monitoring Program/Routes and Survey Planning/Point and route data/MMMP routes with details_updated 23-Jun-26.xlsx")
+
+routename_code<-mmmproutes %>% select(loc_label, route)
+
+mmmp2225 <- mmmp2225 %>% rename(loc_label=RouteUniqueName)
+
+mmmp2225withroute<-mmmp2225 %>% left_join(routename_code, by="loc_label")
+
+routeyear2225<-mmmp2225withroute %>% select(route, loc_label, Year)
+
+routeyear2225unique<-unique(routeyear2225)
+
+routeyear2225pivot<-routeyear2225unique %>% mutate(value=1) %>% pivot_wider(
+	names_from = Year,
+	values_from = value,
+	values_fill = 0
+) 
+```
+
+##Joining the Pivot Tables for Year and Route
+
+```{r}
+routeyear1319pivot<-routeyear1319pivot %>% rename(loc_label=RouteIdentifier)
+
+routeyearpivot<-routeyear1319pivot %>% full_join(routeyear2225pivot, by="loc_label") %>% mutate(across(where(is.numeric), ~ replace_na(., 0)))
+
+routeyeartable<-routeyearpivot %>% rename(original_name=route.x, updated_name=route.y)
+routeyeartable<-routeyeartable[,c(1,10,2,6,3:5,7:9,11:14)]
+
+routeyeartable$NumberYears<-rowSums(routeyeartable[,4:14])
+
+write_xlsx(routeyeartable, "C:/Users/gclark/OneDrive - birdscanada.org/Documents/Marsh-Monitoring-Data-Analyses/Table of MMMP routes with years surveyed updated.xlsx")
+```
+
+Some sites were only surveyed in the earlier years and some sites were only surveyed in the later years. For analyses, I think we need sites with data from across the period from 2012-2025 (or indeed, 2026).
+
+#Fun with 2021 Data
+
+```{r}
+primary_2021<-read.csv("2021 MMMP Field Data_Primary Species_cleaned.csv")
+
+secondary_2021<-read.csv("2021 MMMP Field Data_Secondary Species_cleaned.csv")
+```
+
+#Summary Statistics
+
+##Number of sites (stops/stations) per route per year
+
+```{r}
+survey<-mmmp_2013 %>% select(RouteIdentifier, pointID, statprov_code, survey_year, record_id) %>% 
+  group_by(RouteIdentifier, statprov_code, survey_year) %>% 
+  summarise(nsites = n_distinct(pointID)) 
+
+survey_pivot<-survey %>% pivot_wider(
+  names_from = "survey_year",
+  values_from = "nsites"
+) #1-11 sites per route, fairly consistent number across years for each site
+
+```
+
+##Number of years per route
+
+```{r}
+survey2<-mmmp %>% select(RouteIdentifier, statprov_code, survey_year) %>% distinct() %>% 
+  group_by(RouteIdentifier, statprov_code) %>% 
+  summarise(n_years = n(), .groups = "drop") #Routes surveyed for between 1 and 7 years.
+```
+
+
+
